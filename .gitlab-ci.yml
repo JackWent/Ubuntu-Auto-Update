@@ -1,0 +1,15 @@
+stages:
+  - test
+
+lint:
+  stage: test
+  image: ubuntu:22.04
+  tags:
+    - ubuntu-test-runner
+  script:
+    - apt-get update -qq
+    - apt-get install -y --no-install-recommends shellcheck
+    - shellcheck --severity=warning auto-update.sh
+  only:
+    - master
+    - merge_requests

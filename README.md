@@ -1,93 +1,100 @@
 # Ubuntu Auto Update
 
+A single bash script that patches an Ubuntu/Debian host unattended — updates,
+upgrades, kept-back/phased packages, cleanup — and safely resumes itself
+across the reboot(s) that patching often requires, driven entirely by cron.
 
+## What it does
 
-## Getting started
+Run start-to-finish, the script works through these steps:
 
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
+| Step | What happens |
+|---|---|
+| 1. Pre-check | If `/var/run/reboot-required` already exists (e.g. from a previous manual change), reboot immediately before doing anything else. |
+| 2. Update & upgrade | `apt update`, then `apt upgrade -y` (non-interactive). |
+| 3. Kept-back packages | `apt dist-upgrade -y` to pull in anything upgrade left held back. |
+| 4. Phased updates | Ubuntu's phased-rollout mechanism can hold packages back even after step 3. The script forces them in with `APT::Get::Always-Include-Phased-Updates=true` on both `upgrade` and `dist-upgrade`, then falls back to installing any still-remaining upgradable packages one at a time. |
+| 5. Reboot if required | Checks `/var/run/reboot-required` again; reboots if the new packages need it. |
+| 6. Cleanup | `apt autoremove -y`, `apt autoclean`, then a final `apt update` + upgradable-package count so the log shows whether anything's still outstanding. |
 
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
+## Self-resuming across reboots
 
-## Add your files
-
-* [Create](https://docs.gitlab.com/user/project/repository/web_editor/#create-a-file) or [upload](https://docs.gitlab.com/user/project/repository/web_editor/#upload-a-file) files
-* [Add files using the command line](https://docs.gitlab.com/topics/git/add_files/#add-files-to-a-git-repository) or push an existing Git repository with the following command:
+Steps 2–4 can each trigger a kernel/library update that leaves the host
+needing a reboot mid-cycle. Rather than skip rebooting (and leave the host on
+an old kernel) or block waiting for one, the script tracks its own progress
+in `/var/log/update-script-progress` and calls `reboot` directly when needed:
 
 ```
-cd existing_repo
-git remote add origin https://gitlab.jackwent.co.uk/wentos-projects/ubuntu-auto-update.git
-git branch -M master
-git push -uf origin master
+step1_reboot   →  rebooted before any updates ran; resume at step 2
+step2_updates  →  finished apt upgrade; resume at step 3
+step3_kept_back → finished dist-upgrade; resume at step 4
+step4_phased   →  finished phased-update pass; resume at reboot-check/cleanup
 ```
 
-## Integrate with your tools
+On a clean run (no progress file), it starts from the top. The progress file
+is deleted by `cleanup()` once a full cycle finishes successfully — this is
+what makes the `@reboot` cron entry safe to fire on *every* boot without
+restarting a finished cycle from scratch.
 
-* [Set up project integrations](https://gitlab.jackwent.co.uk/wentos-projects/ubuntu-auto-update/-/settings/integrations)
+**Caveat:** because the progress file only gets cleared on successful
+completion, a host that's rebooted manually (or power-cycled) in the middle
+of a run will resume from wherever it left off on the next boot, rather than
+starting a fresh cycle. If you need to force a clean run, delete
+`/var/log/update-script-progress` first.
 
-## Collaborate with your team
+## Requirements
 
-* [Invite team members and collaborators](https://docs.gitlab.com/user/project/members/)
-* [Create a new merge request](https://docs.gitlab.com/user/project/merge_requests/creating_merge_requests/)
-* [Automatically close issues from merge requests](https://docs.gitlab.com/user/project/issues/managing_issues/#closing-issues-automatically)
-* [Enable merge request approvals](https://docs.gitlab.com/user/project/merge_requests/approvals/)
-* [Set auto-merge](https://docs.gitlab.com/user/project/merge_requests/auto_merge/)
-
-## Test and Deploy
-
-Use the built-in continuous integration in GitLab.
-
-* [Get started with GitLab CI/CD](https://docs.gitlab.com/ci/quick_start/)
-* [Analyze your code for known vulnerabilities with Static Application Security Testing (SAST)](https://docs.gitlab.com/user/application_security/sast/)
-* [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/topics/autodevops/requirements/)
-* [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/user/clusters/agent/)
-* [Set up protected environments](https://docs.gitlab.com/ci/environments/protected_environments/)
-
-***
-
-# Editing this README
-
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thanks to [makeareadme.com](https://www.makeareadme.com/) for this template.
-
-## Suggestions for a good README
-
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
-
-## Name
-Choose a self-explaining name for your project.
-
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
-
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
-
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
+- Ubuntu/Debian host with `apt`, run as (or via `sudo` as) root
+- Outbound internet access to the configured apt repositories
+- `cron`
 
 ## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
 
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
+```bash
+sudo install -d -m 0755 /opt/scripts
+sudo cp auto-update.sh /opt/scripts/auto-update.sh
+sudo chmod +x /opt/scripts/auto-update.sh
+```
 
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
+## Cron setup
 
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
+Add to root's crontab (`sudo crontab -e`):
 
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
+```cron
+@reboot /opt/scripts/auto-update.sh
+0 0 * * * /opt/scripts/auto-update.sh
+```
 
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
+- **`@reboot`** — fires on every boot. This is what lets the script continue
+  a patch cycle after it reboots itself mid-run; it's a no-op (just deletes
+  nothing, exits after cleanup) if there's no in-progress cycle to resume.
+- **`0 0 * * *`** — starts a fresh patch cycle daily at midnight.
 
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
+## Logging
 
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
+The script writes progress to stdout/stderr only — it does not redirect to a
+log file itself. Under cron, that output either gets mailed to root (if a
+local MTA is configured) or silently discarded. To keep a persistent log,
+redirect it in the crontab entry instead:
 
-## License
-For open source projects, say how it is licensed.
+```cron
+@reboot /opt/scripts/auto-update.sh >> /var/log/auto-update.log 2>&1
+0 0 * * * /opt/scripts/auto-update.sh >> /var/log/auto-update.log 2>&1
+```
 
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+## Manual usage
+
+```bash
+sudo /opt/scripts/auto-update.sh
+```
+
+Safe to run by hand at any time — it picks up from `/var/log/update-script-progress`
+exactly as cron would.
+
+## Operational notes
+
+- The script **reboots the host automatically and without warning** whenever
+  a reboot is flagged as required — expect brief downtime on hosts running
+  this on a schedule, especially after kernel updates.
+- All `apt` operations run with `DEBIAN_FRONTEND=noninteractive`, so config-file
+  prompts are auto-answered with package defaults rather than blocking.
