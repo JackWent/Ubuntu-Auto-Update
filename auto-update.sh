@@ -9,11 +9,15 @@ PROGRESS_FILE="/var/log/update-script-progress"
 APT_OPTS=(-o DPkg::Lock::Timeout=600 -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold)
 
 # Count failed apt steps, so a bad run says so instead of "completed successfully".
-ERRORS=0
+# The count is kept in a file because a run can reboot part way and carry on after.
+ERRORS_FILE="/var/log/update-script-errors"
+ERRORS=$(cat "$ERRORS_FILE" 2>/dev/null || echo 0)
+[[ "$ERRORS" =~ ^[0-9]+$ ]] || ERRORS=0
 apt_step() {
     if ! sudo DEBIAN_FRONTEND=noninteractive apt "${APT_OPTS[@]}" "$@"; then
         echo "ERROR: apt $* failed"
         ERRORS=$((ERRORS + 1))
+        echo "$ERRORS" > "$ERRORS_FILE"
     fi
 }
 
@@ -83,7 +87,7 @@ start_script() {
 # Function to perform updates
 step2_install_updates() {
     echo "Updating package lists..."
-    sudo apt update
+    apt_step update
     echo "Upgrading installed packages..."
     # Set non-interactive frontend to avoid prompts
     apt_step upgrade -y
@@ -161,7 +165,7 @@ cleanup() {
     
     # Final check for any remaining updates
     echo "Performing final update check..."
-    sudo apt update
+    apt_step update
     REMAINING_UPDATES=$(apt list --upgradable 2>/dev/null | grep -v "^WARNING" | grep -v "^Listing" | wc -l)
     
     if [ "$REMAINING_UPDATES" -gt 0 ]; then
@@ -171,6 +175,7 @@ cleanup() {
         echo "System is fully up to date."
     fi
     
+    rm -f "$ERRORS_FILE"
     if [ "$ERRORS" -gt 0 ]; then
         echo "Script finished with $ERRORS failed apt step(s). Check the log above."
         rm -f $PROGRESS_FILE

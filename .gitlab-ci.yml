@@ -161,6 +161,19 @@ smoke-test:
     - grep -q "finished with 1 failed apt step" /tmp/run.log
     - '! grep -q "completed successfully" /tmp/run.log'
     - test ! -f /var/log/update-script-progress
+    - 'echo "== test 12: a failure before a reboot is still reported after the resume =="'
+    - rm -f /var/log/update-script-progress /var/run/reboot-required /tmp/apt.log /tmp/reboot.log /var/log/update-script-errors
+    - FAKE_UPGRADABLE_COUNT=0 FAKE_FAIL="apt dist-upgrade -y" SIMULATE_REBOOT_AFTER_UPGRADE=1 bash auto-update.sh
+    - test -f /tmp/reboot.log
+    - rm -f /var/run/reboot-required
+    - set +e; FAKE_UPGRADABLE_COUNT=0 bash auto-update.sh > /tmp/run.log 2>&1; rc=$?; set -e; test "$rc" -eq 1
+    - grep -q "finished with 1 failed apt step" /tmp/run.log
+    - test ! -f /var/log/update-script-errors
+
+    - 'echo "== test 13: a failed apt update is counted =="'
+    - rm -f /var/log/update-script-progress /var/run/reboot-required /tmp/apt.log /tmp/reboot.log /var/log/update-script-errors
+    - set +e; FAKE_UPGRADABLE_COUNT=0 FAKE_FAIL="apt update" bash auto-update.sh > /tmp/run.log 2>&1; rc=$?; set -e; test "$rc" -ge 1
+    - grep -q "failed apt step" /tmp/run.log
   only:
     - master
     - merge_requests
