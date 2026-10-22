@@ -32,7 +32,11 @@ smoke-test:
     - |
       cat > /usr/local/bin/apt <<'STUB'
       #!/bin/bash
-      echo "apt $*" >> /tmp/apt.log
+      echo "apt $*" >> /tmp/apt-raw.log
+      line="apt $*"
+      line="${line// -o DPkg::Lock::Timeout=600 -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold/}"
+      echo "$line" >> /tmp/apt.log
+      if [ -n "${FAKE_FAIL:-}" ] && [ "$line" = "$FAKE_FAIL" ]; then exit 100; fi
       if [[ "$*" == *"list --upgradable"* ]]; then
         echo "Listing..."
         n="${FAKE_UPGRADABLE_COUNT:-0}"
@@ -146,6 +150,17 @@ smoke-test:
     - test ! -f /var/log/update-script-progress
     - grep -qxF "apt upgrade -y" /tmp/apt.log
     - grep -qxF "apt dist-upgrade -y" /tmp/apt.log
+    - 'echo "== test 10: package-changing apt calls wait for the lock and keep config files =="'
+    - rm -f /var/log/update-script-progress /var/run/reboot-required /tmp/apt.log /tmp/apt-raw.log /tmp/reboot.log
+    - FAKE_UPGRADABLE_COUNT=0 bash auto-update.sh
+    - grep -qxF "apt -o DPkg::Lock::Timeout=600 -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold upgrade -y" /tmp/apt-raw.log
+
+    - 'echo "== test 11: a failed apt step is reported and the run exits non-zero =="'
+    - rm -f /var/log/update-script-progress /var/run/reboot-required /tmp/apt.log /tmp/reboot.log
+    - set +e; FAKE_UPGRADABLE_COUNT=0 FAKE_FAIL="apt dist-upgrade -y" bash auto-update.sh > /tmp/run.log 2>&1; rc=$?; set -e; test "$rc" -eq 1
+    - grep -q "finished with 1 failed apt step" /tmp/run.log
+    - '! grep -q "completed successfully" /tmp/run.log'
+    - test ! -f /var/log/update-script-progress
   only:
     - master
     - merge_requests

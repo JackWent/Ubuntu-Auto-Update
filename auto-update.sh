@@ -3,9 +3,39 @@
 # Define a file to track progress
 PROGRESS_FILE="/var/log/update-script-progress"
 
+# Options for every apt call that changes packages:
+# - wait up to 10 minutes for another apt or unattended-upgrades run instead of failing
+# - keep existing config files when a package ships a new default, without prompting
+APT_OPTS=(-o DPkg::Lock::Timeout=600 -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold)
+
+# Count failed apt steps, so a bad run says so instead of "completed successfully".
+ERRORS=0
+apt_step() {
+    if ! sudo DEBIAN_FRONTEND=noninteractive apt "${APT_OPTS[@]}" "$@"; then
+        echo "ERROR: apt $* failed"
+        ERRORS=$((ERRORS + 1))
+    fi
+}
+
+# Ubuntu flags a needed reboot with /var/run/reboot-required. Debian doesn't, so there
+# a newer installed kernel than the running one also counts. KERNEL_MARK remembers the
+# kernel we last rebooted for, so a system that boots an older kernel can't reboot-loop.
+KERNEL_MARK="/var/lib/update-script-kernel"
+reboot_needed() {
+    [ -f /var/run/reboot-required ] && return 0
+    [ -e /usr/share/update-notifier/notify-reboot-required ] && return 1
+    local newest
+    newest=$(find /boot -maxdepth 1 -name "vmlinuz-*" 2>/dev/null | sed "s#^/boot/vmlinuz-##" | sort -V | tail -n 1)
+    if [ -n "$newest" ] && [ "$newest" != "$(uname -r)" ] && [ "$(cat "$KERNEL_MARK" 2>/dev/null)" != "$newest" ]; then
+        echo "$newest" > "$KERNEL_MARK"
+        return 0
+    fi
+    return 1
+}
+
 # Function to check if a reboot is required
 check_reboot() {
-    if [ -f /var/run/reboot-required ]; then
+    if reboot_needed; then
         echo "Reboot required. Rebooting now..."
         echo "step1_reboot" > $PROGRESS_FILE
         reboot
@@ -56,7 +86,7 @@ step2_install_updates() {
     sudo apt update
     echo "Upgrading installed packages..."
     # Set non-interactive frontend to avoid prompts
-    sudo DEBIAN_FRONTEND=noninteractive apt upgrade -y
+    apt_step upgrade -y
     echo "step2_updates" > $PROGRESS_FILE
     step3_install_kept_back
 }
@@ -65,7 +95,7 @@ step2_install_updates() {
 step3_install_kept_back() {
     echo "Installing kept-back packages..."
     # Set non-interactive frontend to avoid prompts
-    sudo DEBIAN_FRONTEND=noninteractive apt dist-upgrade -y
+    apt_step dist-upgrade -y
     echo "step3_kept_back" > $PROGRESS_FILE
     step4_install_phased_updates
 }
@@ -83,11 +113,11 @@ step4_install_phased_updates() {
         
         # Method 1: Use the correct apt option to bypass phasing
         echo "Running apt upgrade with phased updates included..."
-        sudo DEBIAN_FRONTEND=noninteractive apt -o APT::Get::Always-Include-Phased-Updates=true upgrade -y
+        apt_step -o APT::Get::Always-Include-Phased-Updates=true upgrade -y
         
         # Method 2: Alternative using dist-upgrade with phasing override
         echo "Running dist-upgrade with phased updates included..."
-        sudo DEBIAN_FRONTEND=noninteractive apt -o APT::Get::Always-Include-Phased-Updates=true dist-upgrade -y
+        apt_step -o APT::Get::Always-Include-Phased-Updates=true dist-upgrade -y
         
         # Method 3: If the above don't work, try installing specific packages
         echo "Checking for any remaining upgradable packages..."
@@ -95,9 +125,17 @@ step4_install_phased_updates() {
         
         if [ -n "$REMAINING_PACKAGES" ]; then
             echo "Installing remaining packages individually..."
+            # apt install marks a package as manually installed; remember which were
+            # automatic so autoremove can still clean them up later.
+            AUTO_BEFORE=$(apt-mark showauto 2>/dev/null)
             for package in $REMAINING_PACKAGES; do
                 echo "Installing $package..."
-                sudo DEBIAN_FRONTEND=noninteractive apt -o APT::Get::Always-Include-Phased-Updates=true install -y "$package" 2>/dev/null || echo "Failed to install $package"
+                sudo DEBIAN_FRONTEND=noninteractive apt "${APT_OPTS[@]}" -o APT::Get::Always-Include-Phased-Updates=true install -y "$package" 2>/dev/null || echo "Failed to install $package (held packages are skipped)"
+            done
+            for package in $REMAINING_PACKAGES; do
+                if grep -qxF "$package" <<< "$AUTO_BEFORE"; then
+                    sudo apt-mark auto "$package" > /dev/null 2>&1 || true
+                fi
             done
         fi
         
@@ -118,8 +156,8 @@ check_reboot_after_updates() {
 # Function to clean up unnecessary packages
 cleanup() {
     echo "Cleaning up unnecessary packages..."
-    sudo apt autoremove -y
-    sudo apt autoclean
+    apt_step autoremove -y
+    apt_step autoclean
     
     # Final check for any remaining updates
     echo "Performing final update check..."
@@ -133,6 +171,11 @@ cleanup() {
         echo "System is fully up to date."
     fi
     
+    if [ "$ERRORS" -gt 0 ]; then
+        echo "Script finished with $ERRORS failed apt step(s). Check the log above."
+        rm -f $PROGRESS_FILE
+        exit 1
+    fi
     echo "Script completed successfully."
     rm -f $PROGRESS_FILE
 }
