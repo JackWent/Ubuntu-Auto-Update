@@ -8,6 +8,15 @@ PROGRESS_FILE="/var/log/update-script-progress"
 # - keep existing config files when a package ships a new default, without prompting
 APT_OPTS=(-o DPkg::Lock::Timeout=600 -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold)
 
+# Discord report at the end of each run that changed something or failed (quiet otherwise).
+# The webhook is read from HOOK_FILE (root-only); without it, no report is sent.
+# STATE_DIR keeps what was installed before the run and how many reboots it took, across reboots.
+HOOK_FILE="/etc/auto-update/discord-webhook"
+STATE_DIR="/var/lib/update-script"
+BEFORE_FILE="$STATE_DIR/packages-before"
+REBOOTS_FILE="$STATE_DIR/reboots"
+FAILED_FILE="$STATE_DIR/failed-steps"
+
 # Count failed apt steps, so a bad run says so instead of "completed successfully".
 # The count is kept in a file because a run can reboot part way and carry on after.
 ERRORS_FILE="/var/log/update-script-errors"
@@ -16,6 +25,7 @@ ERRORS=$(cat "$ERRORS_FILE" 2>/dev/null || echo 0)
 apt_step() {
     if ! sudo DEBIAN_FRONTEND=noninteractive apt "${APT_OPTS[@]}" "$@"; then
         echo "ERROR: apt $* failed"
+        mkdir -p "$STATE_DIR" && echo "apt $*" >> "$FAILED_FILE"
         ERRORS=$((ERRORS + 1))
         echo "$ERRORS" > "$ERRORS_FILE"
     fi
@@ -41,7 +51,9 @@ reboot_needed() {
 check_reboot() {
     if reboot_needed; then
         echo "Reboot required. Rebooting now..."
-        echo "step1_reboot" > $PROGRESS_FILE
+        mkdir -p "$STATE_DIR"
+        echo $(( $(cat "$REBOOTS_FILE" 2>/dev/null || echo 0) + 1 )) > "$REBOOTS_FILE"
+        [ -f $PROGRESS_FILE ] || echo "step1_reboot" > $PROGRESS_FILE
         reboot
         exit 0
     fi
@@ -80,6 +92,11 @@ check_progress() {
 
 # Function to start the script
 start_script() {
+    # A fresh run: remember the installed versions so the report can list what changed.
+    mkdir -p "$STATE_DIR"
+    dpkg-query -W -f='${Package} ${Version}\n' > "$BEFORE_FILE" 2>/dev/null
+    echo 0 > "$REBOOTS_FILE"
+    rm -f "$FAILED_FILE"
     check_reboot
     step2_install_updates
 }
@@ -176,6 +193,8 @@ cleanup() {
     fi
     
     rm -f "$ERRORS_FILE"
+    report "$REMAINING_UPDATES"
+    rm -f "$BEFORE_FILE" "$REBOOTS_FILE" "$FAILED_FILE"
     if [ "$ERRORS" -gt 0 ]; then
         echo "Script finished with $ERRORS failed apt step(s). Check the log above."
         rm -f $PROGRESS_FILE
@@ -183,6 +202,53 @@ cleanup() {
     fi
     echo "Script completed successfully."
     rm -f $PROGRESS_FILE
+}
+
+# JSON string body from stdin (quotes, backslashes, tabs, newlines).
+json_text() {
+    sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/\t/ /g' | awk '{printf "%s\\n", $0}'
+}
+
+# Post the run's result to Discord: what changed (old -> new), reboots, what's still pending,
+# failed steps. Nothing is sent for a run that installed nothing and had no errors.
+report() {
+    local remaining="$1" url changes removed reboots failed title colour summary body
+    url=$(cat "$HOOK_FILE" 2>/dev/null) || return 0
+    [ -n "$url" ] || return 0
+    if [ -f "$BEFORE_FILE" ]; then
+        changes=$(dpkg-query -W -f='${Package} ${Version}\n' 2>/dev/null | awk 'NR==FNR {old[$1]=$2; next}
+            !($1 in old) {print $1 " (new) " $2; next} old[$1] != $2 {print $1 " " old[$1] " -> " $2}' "$BEFORE_FILE" -)
+        removed=$(dpkg-query -W -f='${Package}\n' 2>/dev/null | awk 'NR==FNR {now[$1]=1; next} !($1 in now)' - "$BEFORE_FILE" | wc -l)
+    fi
+    reboots=$(cat "$REBOOTS_FILE" 2>/dev/null || echo 0)
+    failed=$(cat "$FAILED_FILE" 2>/dev/null)
+    if [ -z "$changes" ] && [ "$reboots" -eq 0 ] && [ "$ERRORS" -eq 0 ]; then
+        return 0
+    fi
+    local n=0
+    [ -n "$changes" ] && n=$(printf '%s\n' "$changes" | wc -l)
+    if [ "$ERRORS" -gt 0 ]; then
+        title="❌ $(hostname -s): patching had $ERRORS failed step(s)"; colour=15158332
+    elif [ "${remaining:-0}" -gt 0 ]; then
+        title="🩹 $(hostname -s) patched, $remaining still pending"; colour=16098851
+    else
+        title="🩹 $(hostname -s) patched"; colour=4437377
+    fi
+    summary="**$n package(s) updated**"
+    [ "${removed:-0}" -gt 0 ] && summary="$summary · $removed removed"
+    [ "$reboots" -gt 0 ] && summary="$summary · rebooted ${reboots}×"
+    summary="$summary · ${remaining:-0} pending"
+    body="$summary"
+    [ -n "$failed" ] && body="$body"$'\n'"Failed: "$'\n'"\`\`\`"$'\n'"$failed"$'\n'"\`\`\`"
+    if [ -n "$changes" ]; then
+        body="$body"$'\n'"\`\`\`"$'\n'"$(printf '%s\n' "$changes" | head -40)"
+        [ "$n" -gt 40 ] && body="$body"$'\n'"…and $((n - 40)) more"
+        body="$body"$'\n'"\`\`\`"
+    fi
+    printf '{"embeds":[{"title":"%s","description":"%s","color":%s,"footer":{"text":"auto-update.sh · %s"},"timestamp":"%s"}],"allowed_mentions":{"parse":[]}}' \
+        "$(printf '%s' "$title" | json_text | sed 's/\\n$//')" "$(printf '%s' "$body" | cut -c1-3800 | json_text)" "$colour" \
+        "$(uname -r)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+        | curl -sS -m 15 -o /dev/null -H 'Content-Type: application/json' -d @- "$url" || echo "Discord report failed"
 }
 
 # Function to show current phasing status (optional utility)

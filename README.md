@@ -17,6 +17,14 @@ Run start-to-finish, the script works through these steps:
 | 5. Reboot if required | Checks `/var/run/reboot-required` again; reboots if the new packages need it. |
 | 6. Cleanup | `apt autoremove -y`, `apt autoclean`, then a final `apt update` + upgradable-package count so the log shows whether anything's still outstanding. |
 
+## Discord report
+
+At the end of a run that installed or removed anything, rebooted, or had a failed apt step, the
+script posts one message to Discord: each package with its old and new version, reboots, updates
+still pending and any failed steps. A run with nothing to do sends nothing. The webhook URL is read
+from `/etc/auto-update/discord-webhook` (root only, mode 600); without that file no report is sent.
+Run state for the report is kept in `/var/lib/update-script/` so it survives the reboots.
+
 ## Self-resuming across reboots
 
 Steps 2–4 can each trigger a kernel/library update that leaves the host
