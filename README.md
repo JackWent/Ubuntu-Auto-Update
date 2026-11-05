@@ -52,7 +52,7 @@ starting a fresh cycle. If you need to force a clean run, delete
 
 ## Requirements
 
-- Ubuntu/Debian host with `apt`, run as (or via `sudo` as) root
+- Ubuntu/Debian host with `apt`, run as root (it calls apt directly and refuses to run as another user)
 - Outbound internet access to the configured apt repositories
 - `cron`
 

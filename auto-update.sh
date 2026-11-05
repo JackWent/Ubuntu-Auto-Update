@@ -1,5 +1,12 @@
 #!/bin/bash
 # Enhanced Ubuntu Auto Patch Script with Phased Updates Support
+
+# Runs as root (root's crontab). apt is called directly rather than through sudo: an autoremove
+# after a release upgrade can remove sudo, which would then make every apt step fail.
+if [ "$(id -u)" -ne 0 ]; then
+    echo "auto-update.sh must run as root" >&2
+    exit 1
+fi
 # Define a file to track progress
 PROGRESS_FILE="/var/log/update-script-progress"
 
@@ -23,7 +30,7 @@ ERRORS_FILE="/var/log/update-script-errors"
 ERRORS=$(cat "$ERRORS_FILE" 2>/dev/null || echo 0)
 [[ "$ERRORS" =~ ^[0-9]+$ ]] || ERRORS=0
 apt_step() {
-    if ! sudo DEBIAN_FRONTEND=noninteractive apt "${APT_OPTS[@]}" "$@"; then
+    if ! DEBIAN_FRONTEND=noninteractive apt "${APT_OPTS[@]}" "$@"; then
         echo "ERROR: apt $* failed"
         mkdir -p "$STATE_DIR" && echo "apt $*" >> "$FAILED_FILE"
         ERRORS=$((ERRORS + 1))
@@ -151,11 +158,11 @@ step4_install_phased_updates() {
             AUTO_BEFORE=$(apt-mark showauto 2>/dev/null)
             for package in $REMAINING_PACKAGES; do
                 echo "Installing $package..."
-                sudo DEBIAN_FRONTEND=noninteractive apt "${APT_OPTS[@]}" -o APT::Get::Always-Include-Phased-Updates=true install -y "$package" 2>/dev/null || echo "Failed to install $package (held packages are skipped)"
+                DEBIAN_FRONTEND=noninteractive apt "${APT_OPTS[@]}" -o APT::Get::Always-Include-Phased-Updates=true install -y "$package" 2>/dev/null || echo "Failed to install $package (held packages are skipped)"
             done
             for package in $REMAINING_PACKAGES; do
                 if grep -qxF "$package" <<< "$AUTO_BEFORE"; then
-                    sudo apt-mark auto "$package" > /dev/null 2>&1 || true
+                    apt-mark auto "$package" > /dev/null 2>&1 || true
                 fi
             done
         fi

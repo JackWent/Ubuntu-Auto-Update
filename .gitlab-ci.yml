@@ -23,11 +23,12 @@ smoke-test:
     - echo "== syntax check =="
     - bash -n auto-update.sh
 
-    # Stub apt/sudo/reboot so the state-machine logic (dispatch on
+    # Stub apt/reboot so the state-machine logic (dispatch on
     # /var/log/update-script-progress, phased-update fallback, reboot
     # handling) can be exercised without touching real packages or
     # actually rebooting the runner. /usr/local/bin is earlier in PATH
-    # than /usr/bin, so these shadow the real apt/sudo.
+    # than /usr/bin, so these shadow the real apt. There is deliberately no sudo in
+    # the image: the script runs as root and must not need it (sudo can be autoremoved).
     - mkdir -p /usr/local/bin /var/run
     - |
       cat > /usr/local/bin/apt <<'STUB'
@@ -52,16 +53,6 @@ smoke-test:
       exit 0
       STUB
     - chmod +x /usr/local/bin/apt
-    - |
-      cat > /usr/local/bin/sudo <<'STUB'
-      #!/bin/bash
-      while [ $# -gt 0 ] && [[ "$1" == *=* ]] && [[ "$1" != -* ]]; do
-        export "$1"
-        shift
-      done
-      exec "$@"
-      STUB
-    - chmod +x /usr/local/bin/sudo
     - |
       cat > /usr/local/bin/reboot <<'STUB'
       #!/bin/bash
