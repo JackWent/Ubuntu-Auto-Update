@@ -7,8 +7,13 @@ if [ "$(id -u)" -ne 0 ]; then
     echo "auto-update.sh must run as root" >&2
     exit 1
 fi
+# STATE_DIR keeps what the run needs across reboots: its progress, the failed-step count, and what was
+# installed before the run. It is under /var/lib (root only), because /var/log can be written by other
+# groups and root follows symlinks there.
+STATE_DIR="/var/lib/update-script"
+mkdir -p "$STATE_DIR"
 # Define a file to track progress
-PROGRESS_FILE="/var/log/update-script-progress"
+PROGRESS_FILE="$STATE_DIR/progress"
 
 # Options for every apt call that changes packages:
 # - wait up to 10 minutes for another apt or unattended-upgrades run instead of failing
@@ -17,16 +22,24 @@ APT_OPTS=(-o DPkg::Lock::Timeout=600 -o Dpkg::Options::=--force-confdef -o Dpkg:
 
 # Discord report at the end of each run that changed something or failed (quiet otherwise).
 # The webhook is read from HOOK_FILE (root-only); without it, no report is sent.
-# STATE_DIR keeps what was installed before the run and how many reboots it took, across reboots.
 HOOK_FILE="/etc/auto-update/discord-webhook"
-STATE_DIR="/var/lib/update-script"
 BEFORE_FILE="$STATE_DIR/packages-before"
 REBOOTS_FILE="$STATE_DIR/reboots"
 FAILED_FILE="$STATE_DIR/failed-steps"
 
 # Count failed apt steps, so a bad run says so instead of "completed successfully".
 # The count is kept in a file because a run can reboot part way and carry on after.
-ERRORS_FILE="/var/log/update-script-errors"
+ERRORS_FILE="$STATE_DIR/errors"
+
+# Older versions kept these two files in /var/log. Take over a real file left there by a run that was
+# interrupted by a reboot (never a symlink), then remove whatever is left at the old path.
+for name in progress errors; do
+    old="/var/log/update-script-$name"
+    if [ -f "$old" ] && [ ! -L "$old" ] && [ ! -e "$STATE_DIR/$name" ]; then
+        mv "$old" "$STATE_DIR/$name"
+    fi
+    rm -f "$old"
+done
 ERRORS=$(cat "$ERRORS_FILE" 2>/dev/null || echo 0)
 [[ "$ERRORS" =~ ^[0-9]+$ ]] || ERRORS=0
 apt_step() {
@@ -60,7 +73,7 @@ check_reboot() {
         echo "Reboot required. Rebooting now..."
         mkdir -p "$STATE_DIR"
         echo $(( $(cat "$REBOOTS_FILE" 2>/dev/null || echo 0) + 1 )) > "$REBOOTS_FILE"
-        echo "step1_reboot" > $PROGRESS_FILE
+        echo "step1_reboot" > "$PROGRESS_FILE"
         reboot
         exit 0
     fi
@@ -68,8 +81,8 @@ check_reboot() {
 
 # Function to check the progress and continue where left off
 check_progress() {
-    if [ -f $PROGRESS_FILE ]; then
-        PROGRESS=$(cat $PROGRESS_FILE)
+    if [ -f "$PROGRESS_FILE" ]; then
+        PROGRESS=$(cat "$PROGRESS_FILE")
         case $PROGRESS in
             "step1_reboot")
                 echo "Continuing after first reboot..."
@@ -115,7 +128,7 @@ step2_install_updates() {
     echo "Upgrading installed packages..."
     # Set non-interactive frontend to avoid prompts
     apt_step upgrade -y
-    echo "step2_updates" > $PROGRESS_FILE
+    echo "step2_updates" > "$PROGRESS_FILE"
     step3_install_kept_back
 }
 
@@ -124,7 +137,7 @@ step3_install_kept_back() {
     echo "Installing kept-back packages..."
     # Set non-interactive frontend to avoid prompts
     apt_step dist-upgrade -y
-    echo "step3_kept_back" > $PROGRESS_FILE
+    echo "step3_kept_back" > "$PROGRESS_FILE"
     step4_install_phased_updates
 }
 
@@ -171,7 +184,7 @@ step4_install_phased_updates() {
         echo "No packages appear to be held back."
     fi
     
-    echo "step4_phased" > $PROGRESS_FILE
+    echo "step4_phased" > "$PROGRESS_FILE"
     check_reboot_after_updates
 }
 
@@ -204,11 +217,11 @@ cleanup() {
     rm -f "$BEFORE_FILE" "$REBOOTS_FILE" "$FAILED_FILE"
     if [ "$ERRORS" -gt 0 ]; then
         echo "Script finished with $ERRORS failed apt step(s). Check the log above."
-        rm -f $PROGRESS_FILE
+        rm -f "$PROGRESS_FILE"
         exit 1
     fi
     echo "Script completed successfully."
-    rm -f $PROGRESS_FILE
+    rm -f "$PROGRESS_FILE"
 }
 
 # JSON string body from stdin (quotes, backslashes, tabs, newlines).

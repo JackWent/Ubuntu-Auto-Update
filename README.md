@@ -30,7 +30,7 @@ Run state for the report is kept in `/var/lib/update-script/` so it survives the
 Steps 2–4 can each trigger a kernel/library update that leaves the host
 needing a reboot mid-cycle. Rather than skip rebooting (and leave the host on
 an old kernel) or block waiting for one, the script tracks its own progress
-in `/var/log/update-script-progress` and calls `reboot` directly when needed:
+in `/var/lib/update-script/progress` and calls `reboot` directly when needed:
 
 ```
 step1_reboot   →  rebooted before any updates ran; resume at step 2
@@ -48,7 +48,7 @@ restarting a finished cycle from scratch.
 completion, a host that's rebooted manually (or power-cycled) in the middle
 of a run will resume from wherever it left off on the next boot, rather than
 starting a fresh cycle. If you need to force a clean run, delete
-`/var/log/update-script-progress` first.
+`/var/lib/update-script/progress` first.
 
 ## Requirements
 
@@ -96,7 +96,7 @@ redirect it in the crontab entry instead:
 sudo /opt/scripts/auto-update.sh
 ```
 
-Safe to run by hand at any time — it picks up from `/var/log/update-script-progress`
+Safe to run by hand at any time — it picks up from `/var/lib/update-script/progress`
 exactly as cron would.
 
 ## Operational notes

@@ -24,12 +24,12 @@ smoke-test:
     - bash -n auto-update.sh
 
     # Stub apt/reboot so the state-machine logic (dispatch on
-    # /var/log/update-script-progress, phased-update fallback, reboot
+    # /var/lib/update-script/progress, phased-update fallback, reboot
     # handling) can be exercised without touching real packages or
     # actually rebooting the runner. /usr/local/bin is earlier in PATH
     # than /usr/bin, so these shadow the real apt. There is deliberately no sudo in
     # the image: the script runs as root and must not need it (sudo can be autoremoved).
-    - mkdir -p /usr/local/bin /var/run
+    - mkdir -p /usr/local/bin /var/run /var/lib/update-script
     - |
       cat > /usr/local/bin/apt <<'STUB'
       #!/bin/bash
@@ -62,9 +62,9 @@ smoke-test:
     - chmod +x /usr/local/bin/reboot
 
     - 'echo "== test 1: full clean run, no reboot required, no phased packages =="'
-    - rm -f /var/log/update-script-progress /var/run/reboot-required /tmp/apt.log /tmp/reboot.log
+    - rm -f /var/lib/update-script/progress /var/run/reboot-required /tmp/apt.log /tmp/reboot.log
     - FAKE_UPGRADABLE_COUNT=0 bash auto-update.sh
-    - test ! -f /var/log/update-script-progress
+    - test ! -f /var/lib/update-script/progress
     - test ! -f /tmp/reboot.log
     - grep -qxF "apt upgrade -y" /tmp/apt.log
     - grep -qxF "apt dist-upgrade -y" /tmp/apt.log
@@ -73,98 +73,116 @@ smoke-test:
     - '! grep -q -- "-o APT::Get::Always-Include-Phased-Updates=true" /tmp/apt.log'
 
     - 'echo "== test 2: full clean run, phased packages present =="'
-    - rm -f /var/log/update-script-progress /var/run/reboot-required /tmp/apt.log /tmp/reboot.log
+    - rm -f /var/lib/update-script/progress /var/run/reboot-required /tmp/apt.log /tmp/reboot.log
     - FAKE_UPGRADABLE_COUNT=2 bash auto-update.sh
-    - test ! -f /var/log/update-script-progress
+    - test ! -f /var/lib/update-script/progress
     - grep -q -- "-o APT::Get::Always-Include-Phased-Updates=true upgrade -y" /tmp/apt.log
     - grep -q -- "-o APT::Get::Always-Include-Phased-Updates=true dist-upgrade -y" /tmp/apt.log
     - grep -q -- "install -y pkg1" /tmp/apt.log
     - grep -q -- "install -y pkg2" /tmp/apt.log
 
     - 'echo "== test 3: reboot required before any updates run =="'
-    - rm -f /var/log/update-script-progress /tmp/apt.log /tmp/reboot.log
+    - rm -f /var/lib/update-script/progress /tmp/apt.log /tmp/reboot.log
     - touch /var/run/reboot-required
     - FAKE_UPGRADABLE_COUNT=0 bash auto-update.sh
     - test -f /tmp/reboot.log
-    - grep -qxF "step1_reboot" /var/log/update-script-progress
+    - grep -qxF "step1_reboot" /var/lib/update-script/progress
     - test ! -f /tmp/apt.log
     - rm -f /var/run/reboot-required
 
     - 'echo "== test 4: reboot required mid-cascade (after the upgrade step) =="'
-    - rm -f /var/log/update-script-progress /var/run/reboot-required /tmp/apt.log /tmp/reboot.log
+    - rm -f /var/lib/update-script/progress /var/run/reboot-required /tmp/apt.log /tmp/reboot.log
     - FAKE_UPGRADABLE_COUNT=0 SIMULATE_REBOOT_AFTER_UPGRADE=1 bash auto-update.sh
     - test -f /tmp/reboot.log
-    - grep -qxF "step1_reboot" /var/log/update-script-progress
+    - grep -qxF "step1_reboot" /var/lib/update-script/progress
     - grep -qxF "apt upgrade -y" /tmp/apt.log
     - '! grep -qxF "apt autoremove -y" /tmp/apt.log'
     - rm -f /var/run/reboot-required
 
     - 'echo "== test 5: resume from step2_updates skips step2''s own update/upgrade =="'
     - rm -f /var/run/reboot-required /tmp/apt.log /tmp/reboot.log
-    - echo step2_updates > /var/log/update-script-progress
+    - echo step2_updates > /var/lib/update-script/progress
     - FAKE_UPGRADABLE_COUNT=0 bash auto-update.sh
-    - test ! -f /var/log/update-script-progress
+    - test ! -f /var/lib/update-script/progress
     - '! grep -qxF "apt upgrade -y" /tmp/apt.log'
     - grep -qxF "apt dist-upgrade -y" /tmp/apt.log
     - grep -qxF "apt autoremove -y" /tmp/apt.log
 
     - 'echo "== test 6: resume from step3_kept_back skips step2 and step3 =="'
     - rm -f /var/run/reboot-required /tmp/apt.log /tmp/reboot.log
-    - echo step3_kept_back > /var/log/update-script-progress
+    - echo step3_kept_back > /var/lib/update-script/progress
     - FAKE_UPGRADABLE_COUNT=0 bash auto-update.sh
-    - test ! -f /var/log/update-script-progress
+    - test ! -f /var/lib/update-script/progress
     - '! grep -qxF "apt upgrade -y" /tmp/apt.log'
     - '! grep -qxF "apt dist-upgrade -y" /tmp/apt.log'
     - grep -qxF "apt autoremove -y" /tmp/apt.log
 
     - 'echo "== test 7: resume from step4_phased skips straight to cleanup =="'
     - rm -f /var/run/reboot-required /tmp/apt.log /tmp/reboot.log
-    - echo step4_phased > /var/log/update-script-progress
+    - echo step4_phased > /var/lib/update-script/progress
     - FAKE_UPGRADABLE_COUNT=0 bash auto-update.sh
-    - test ! -f /var/log/update-script-progress
+    - test ! -f /var/lib/update-script/progress
     - '! grep -qxF "apt upgrade -y" /tmp/apt.log'
     - '! grep -qxF "apt dist-upgrade -y" /tmp/apt.log'
     - grep -qxF "apt autoremove -y" /tmp/apt.log
 
     - 'echo "== test 8: resume from step1_reboot re-runs update/upgrade (unlike step2_updates) =="'
     - rm -f /var/run/reboot-required /tmp/apt.log /tmp/reboot.log
-    - echo step1_reboot > /var/log/update-script-progress
+    - echo step1_reboot > /var/lib/update-script/progress
     - FAKE_UPGRADABLE_COUNT=0 bash auto-update.sh
-    - test ! -f /var/log/update-script-progress
+    - test ! -f /var/lib/update-script/progress
     - grep -qxF "apt upgrade -y" /tmp/apt.log
     - grep -qxF "apt dist-upgrade -y" /tmp/apt.log
 
     - 'echo "== test 9: unknown progress value falls back to a fresh run =="'
     - rm -f /var/run/reboot-required /tmp/apt.log /tmp/reboot.log
-    - echo bogus_state > /var/log/update-script-progress
+    - echo bogus_state > /var/lib/update-script/progress
     - FAKE_UPGRADABLE_COUNT=0 bash auto-update.sh
-    - test ! -f /var/log/update-script-progress
+    - test ! -f /var/lib/update-script/progress
     - grep -qxF "apt upgrade -y" /tmp/apt.log
     - grep -qxF "apt dist-upgrade -y" /tmp/apt.log
     - 'echo "== test 10: package-changing apt calls wait for the lock and keep config files =="'
-    - rm -f /var/log/update-script-progress /var/run/reboot-required /tmp/apt.log /tmp/apt-raw.log /tmp/reboot.log
+    - rm -f /var/lib/update-script/progress /var/run/reboot-required /tmp/apt.log /tmp/apt-raw.log /tmp/reboot.log
     - FAKE_UPGRADABLE_COUNT=0 bash auto-update.sh
     - grep -qxF "apt -o DPkg::Lock::Timeout=600 -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold upgrade -y" /tmp/apt-raw.log
 
     - 'echo "== test 11: a failed apt step is reported and the run exits non-zero =="'
-    - rm -f /var/log/update-script-progress /var/run/reboot-required /tmp/apt.log /tmp/reboot.log
+    - rm -f /var/lib/update-script/progress /var/run/reboot-required /tmp/apt.log /tmp/reboot.log
     - set +e; FAKE_UPGRADABLE_COUNT=0 FAKE_FAIL="apt dist-upgrade -y" bash auto-update.sh > /tmp/run.log 2>&1; rc=$?; set -e; test "$rc" -eq 1
     - grep -q "finished with 1 failed apt step" /tmp/run.log
     - '! grep -q "completed successfully" /tmp/run.log'
-    - test ! -f /var/log/update-script-progress
+    - test ! -f /var/lib/update-script/progress
     - 'echo "== test 12: a failure before a reboot is still reported after the resume =="'
-    - rm -f /var/log/update-script-progress /var/run/reboot-required /tmp/apt.log /tmp/reboot.log /var/log/update-script-errors
+    - rm -f /var/lib/update-script/progress /var/run/reboot-required /tmp/apt.log /tmp/reboot.log /var/lib/update-script/errors
     - FAKE_UPGRADABLE_COUNT=0 FAKE_FAIL="apt dist-upgrade -y" SIMULATE_REBOOT_AFTER_UPGRADE=1 bash auto-update.sh
     - test -f /tmp/reboot.log
     - rm -f /var/run/reboot-required
     - set +e; FAKE_UPGRADABLE_COUNT=0 bash auto-update.sh > /tmp/run.log 2>&1; rc=$?; set -e; test "$rc" -eq 1
     - grep -q "finished with 1 failed apt step" /tmp/run.log
-    - test ! -f /var/log/update-script-errors
+    - test ! -f /var/lib/update-script/errors
 
     - 'echo "== test 13: a failed apt update is counted =="'
-    - rm -f /var/log/update-script-progress /var/run/reboot-required /tmp/apt.log /tmp/reboot.log /var/log/update-script-errors
+    - rm -f /var/lib/update-script/progress /var/run/reboot-required /tmp/apt.log /tmp/reboot.log /var/lib/update-script/errors
     - set +e; FAKE_UPGRADABLE_COUNT=0 FAKE_FAIL="apt update" bash auto-update.sh > /tmp/run.log 2>&1; rc=$?; set -e; test "$rc" -ge 1
     - grep -q "failed apt step" /tmp/run.log
+
+    - 'echo "== test 14: progress left in /var/log by an older version is picked up, then removed =="'
+    - rm -f /var/lib/update-script/progress /var/log/update-script-progress /var/run/reboot-required /tmp/apt.log /tmp/reboot.log
+    - echo step3_kept_back > /var/log/update-script-progress
+    - FAKE_UPGRADABLE_COUNT=0 bash auto-update.sh
+    - '! grep -qxF "apt upgrade -y" /tmp/apt.log'
+    - grep -qxF "apt autoremove -y" /tmp/apt.log
+    - test ! -e /var/log/update-script-progress
+    - test ! -e /var/lib/update-script/progress
+
+    - 'echo "== test 15: a symlink planted at the old /var/log path is not followed =="'
+    - rm -f /var/lib/update-script/progress /var/log/update-script-progress /tmp/apt.log /tmp/reboot.log /tmp/victim
+    - echo untouched > /tmp/victim
+    - ln -s /tmp/victim /var/log/update-script-progress
+    - FAKE_UPGRADABLE_COUNT=0 bash auto-update.sh
+    - grep -qxF "apt upgrade -y" /tmp/apt.log
+    - test ! -e /var/log/update-script-progress
+    - test "$(cat /tmp/victim)" = untouched
   only:
     - master
     - merge_requests
