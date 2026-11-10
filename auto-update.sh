@@ -1,6 +1,10 @@
 #!/bin/bash
 # Enhanced Ubuntu Auto Patch Script with Phased Updates Support
 
+# Version of this script. It is inside the signed file, so someone checking the .sig by hand can also see
+# whether they were given an old release.
+SCRIPT_VERSION="2"
+
 # Runs as root (root's crontab). apt is called directly rather than through sudo: an autoremove
 # after a release upgrade can remove sudo, which would then make every apt step fail.
 if [ "$(id -u)" -ne 0 ]; then
@@ -12,6 +16,12 @@ fi
 # groups and root follows symlinks there.
 STATE_DIR="/var/lib/update-script"
 mkdir -p "$STATE_DIR"
+# One run at a time: a manual run overlapping the cron or @reboot run would race on the state files.
+exec 9>"$STATE_DIR/lock"
+if ! flock -n 9; then
+    echo "another auto-update.sh run is in progress; exiting"
+    exit 0
+fi
 # Define a file to track progress
 PROGRESS_FILE="$STATE_DIR/progress"
 
@@ -31,15 +41,9 @@ FAILED_FILE="$STATE_DIR/failed-steps"
 # The count is kept in a file because a run can reboot part way and carry on after.
 ERRORS_FILE="$STATE_DIR/errors"
 
-# Older versions kept these two files in /var/log. Take over a real file left there by a run that was
-# interrupted by a reboot (never a symlink), then remove whatever is left at the old path.
-for name in progress errors; do
-    old="/var/log/update-script-$name"
-    if [ -f "$old" ] && [ ! -L "$old" ] && [ ! -e "$STATE_DIR/$name" ]; then
-        mv "$old" "$STATE_DIR/$name"
-    fi
-    rm -f "$old"
-done
+# Older versions kept these two files in /var/log. They are never read now (a file in a directory other
+# groups can write is not trusted state), so just remove them.
+rm -f /var/log/update-script-progress /var/log/update-script-errors
 ERRORS=$(cat "$ERRORS_FILE" 2>/dev/null || echo 0)
 [[ "$ERRORS" =~ ^[0-9]+$ ]] || ERRORS=0
 apt_step() {
