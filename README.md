@@ -106,3 +106,7 @@ exactly as cron would.
   this on a schedule, especially after kernel updates.
 - All `apt` operations run with `DEBIAN_FRONTEND=noninteractive`, so config-file
   prompts are auto-answered with package defaults rather than blocking.
+
+## Licence
+
+Released under the MIT licence. See [LICENSE](LICENSE).
