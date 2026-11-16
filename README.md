@@ -1,10 +1,70 @@
-# Ubuntu Auto Update
+<h1 align="center">Ubuntu Auto Update</h1>
 
-A single bash script that patches an Ubuntu/Debian host unattended — updates,
-upgrades, kept-back/phased packages, cleanup — and safely resumes itself
-across the reboot(s) that patching often requires, driven entirely by cron.
+<p align="center">
+  <b>Unattended patching for Ubuntu and Debian servers that finishes the job.</b><br>
+  It installs phased and kept-back updates that <code>unattended-upgrades</code> leaves behind, reboots when it has to,<br>
+  picks up where it left off after each reboot, and posts a Discord report of what changed.
+</p>
 
-## What it does
+<p align="center">
+  <img src="https://img.shields.io/badge/Ubuntu-24.04%20%7C%2026.04-E95420?logo=ubuntu&logoColor=white" alt="Ubuntu 24.04 and 26.04">
+  <img src="https://img.shields.io/badge/Debian-supported-A81D33?logo=debian&logoColor=white" alt="Debian">
+  <img src="https://img.shields.io/badge/bash-single%20file-4EAA25?logo=gnubash&logoColor=white" alt="Single bash file">
+  <img src="https://img.shields.io/badge/reports-Discord-5865F2?logo=discord&logoColor=white" alt="Discord reports">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/licence-MIT-green" alt="MIT licence"></a>
+</p>
+
+<p align="center">
+  <a href="https://jackwent.co.uk/ubuntu-24-04-autopatch-script/"><b>Full write-up</b></a> ·
+  <a href="#quick-start">Quick start</a> ·
+  <a href="#self-resuming-across-reboots">How resuming works</a> ·
+  <a href="https://github.com/JackWent/HA-MQTT-Agent">HA-MQTT-Agent</a>, to watch the results in Home Assistant
+</p>
+
+<p align="center">
+  <img src="docs/flow.svg" alt="One patch cycle: cron, pre-check, upgrade, kept-back packages, phased updates, reboot if required, clean up and Discord report, with each reboot resuming at the saved step" width="100%">
+</p>
+
+## Why not just use unattended-upgrades?
+
+`unattended-upgrades` installs security updates, but it leaves the rest for you: **kept-back packages**, **phased updates** that Ubuntu holds back on some machines for days, and the **reboot** a new kernel needs. Servers end up with a handful of updates that never go away, and a "reboot required" flag that sits there for weeks.
+
+This script does the whole lot in one unattended run:
+
+- `apt upgrade`, then `dist-upgrade` for anything kept back.
+- **Phased updates forced in**, then any stragglers installed one by one.
+- **Reboots only when needed**, and carries on after each reboot from the step it reached.
+- **Cleans up** with `autoremove` and `autoclean`, then logs whether anything is still outstanding.
+- **Reports to Discord**: each package with its old and new version, reboots, anything still pending and any failed step. It stays quiet when there was nothing to do.
+- **Survives the awkward cases**: it runs apt directly as root, so an autoremove that removes `sudo` can't break the rest of the run, and every prompt is answered non-interactively.
+
+## Quick start
+
+```bash
+sudo install -d -m 0755 /opt/scripts
+sudo curl -fsSL -o /opt/scripts/auto-update.sh https://raw.githubusercontent.com/JackWent/Ubuntu-Auto-Update/master/auto-update.sh
+sudo chmod +x /opt/scripts/auto-update.sh
+```
+
+Then add two lines to root's crontab (`sudo crontab -e`):
+
+```cron
+@reboot /opt/scripts/auto-update.sh >> /var/log/auto-update.log 2>&1
+0 0 * * * /opt/scripts/auto-update.sh >> /var/log/auto-update.log 2>&1
+```
+
+Optionally, for Discord reports, save a webhook URL where only root can read it:
+
+```bash
+sudo install -d -m 0700 /etc/auto-update
+echo 'https://discord.com/api/webhooks/…' | sudo tee /etc/auto-update/discord-webhook >/dev/null
+sudo chmod 600 /etc/auto-update/discord-webhook
+```
+
+> [!WARNING]
+> The script **reboots the server on its own** whenever a reboot is required. Schedule it for a time when a few minutes of downtime is fine.
+
+## What each step does
 
 Run start-to-finish, the script works through these steps:
 
@@ -56,7 +116,7 @@ starting a fresh cycle. If you need to force a clean run, delete
 - Outbound internet access to the configured apt repositories
 - `cron`
 
-## Installation
+## Installation in detail
 
 ```bash
 sudo install -d -m 0755 /opt/scripts
@@ -106,6 +166,12 @@ exactly as cron would.
   this on a schedule, especially after kernel updates.
 - All `apt` operations run with `DEBIAN_FRONTEND=noninteractive`, so config-file
   prompts are auto-answered with package defaults rather than blocking.
+
+## Related
+
+- [HA-MQTT-Agent](https://github.com/JackWent/HA-MQTT-Agent): shows pending updates and *reboot required* for every server in Home Assistant, so you can see this script doing its job.
+- [Jarvis](https://github.com/JackWent/Jarvis): my AI homelab assistant. Its own VM runs this script every night, and it saves its state and snapshots itself first in case of a reboot.
+- More homelab write-ups are at [jackwent.co.uk](https://jackwent.co.uk).
 
 ## Licence
 

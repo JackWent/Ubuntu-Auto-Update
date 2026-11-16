@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 300" width="960" height="300" font-family="'Segoe UI',system-ui,-apple-system,sans-serif" role="img" aria-label="Patch cycle: cron starts it, then pre-check, apt upgrade, dist-upgrade for kept-back packages, forced phased updates, reboot if required, cleanup and a Discord report. Each reboot resumes from the saved progress step via the @reboot cron entry.">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10z" fill="#ffb000"/></marker>
+    <marker id="r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10z" fill="#ff7a5c"/></marker>
+    <style>
+      .box { fill: #1e1913; stroke: #3a3127; }
+      .n { fill: #ffb000; font-weight: 700; font-size: 12px; }
+      .h { fill: #eadfcb; font-weight: 600; font-size: 13px; }
+      .s { fill: #a0907a; font-size: 11px; }
+      .m { font-family: Consolas, 'DejaVu Sans Mono', monospace; }
+    </style>
+  </defs>
+  <rect width="960" height="300" rx="14" fill="#15110c"/>
+
+  <!-- cron -->
+  <rect x="20" y="70" width="104" height="76" rx="8" fill="#0c0a07" stroke="#ffb000"/>
+  <text x="72" y="96" text-anchor="middle" class="h">cron</text>
+  <text x="72" y="116" text-anchor="middle" class="s m">0 0 * * *</text>
+  <text x="72" y="133" text-anchor="middle" class="s m">@reboot</text>
+
+  <g text-anchor="middle">
+    <rect class="box" x="146" y="70" width="104" height="76" rx="8"/>
+    <text x="198" y="92" class="n">1</text><text x="198" y="111" class="h">Pre-check</text><text x="198" y="129" class="s">reboot first if</text><text x="198" y="142" class="s">one is pending</text>
+
+    <rect class="box" x="272" y="70" width="104" height="76" rx="8"/>
+    <text x="324" y="92" class="n">2</text><text x="324" y="111" class="h">Upgrade</text><text x="324" y="129" class="s m">apt update</text><text x="324" y="142" class="s m">apt upgrade</text>
+
+    <rect class="box" x="398" y="70" width="104" height="76" rx="8"/>
+    <text x="450" y="92" class="n">3</text><text x="450" y="111" class="h">Kept back</text><text x="450" y="129" class="s m">dist-upgrade</text>
+
+    <rect class="box" x="524" y="70" width="104" height="76" rx="8"/>
+    <text x="576" y="92" class="n">4</text><text x="576" y="111" class="h">Phased</text><text x="576" y="129" class="s">forced in, then</text><text x="576" y="142" class="s">one at a time</text>
+
+    <rect class="box" x="650" y="70" width="104" height="76" rx="8"/>
+    <text x="702" y="92" class="n">5</text><text x="702" y="111" class="h">Reboot?</text><text x="702" y="129" class="s">only if</text><text x="702" y="142" class="s">required</text>
+
+    <rect class="box" x="776" y="70" width="164" height="76" rx="8"/>
+    <text x="858" y="92" class="n">6</text><text x="858" y="111" class="h">Clean up &amp; report</text><text x="858" y="129" class="s m">autoremove, autoclean</text><text x="858" y="142" class="s">Discord: old → new</text>
+  </g>
+
+  <g stroke="#ffb000" stroke-width="1.5" marker-end="url(#a)">
+    <line x1="125" y1="108" x2="143" y2="108"/><line x1="251" y1="108" x2="269" y2="108"/>
+    <line x1="377" y1="108" x2="395" y2="108"/><line x1="503" y1="108" x2="521" y2="108"/>
+    <line x1="629" y1="108" x2="647" y2="108"/><line x1="755" y1="108" x2="773" y2="108"/>
+  </g>
+
+  <!-- resume loop -->
+  <path d="M702 147 C702 230, 560 236, 72 236 L72 150" fill="none" stroke="#ff7a5c" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#r)"/>
+  <rect x="300" y="222" width="360" height="28" rx="6" fill="#15110c"/>
+  <text x="480" y="241" text-anchor="middle" font-size="12" fill="#ff7a5c">reboot → @reboot picks up at the saved step</text>
+  <text x="480" y="276" text-anchor="middle" class="s"><tspan class="m">/var/lib/update-script/progress</tspan> is written after each step and deleted when the cycle finishes</text>
+
+  <text x="20" y="40" font-size="15" font-weight="700" fill="#ffb000">One patch cycle</text>
+  <text x="140" y="40" class="s">steps 2 to 4 can each need a reboot; the script carries on afterwards</text>
+</svg>
