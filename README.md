@@ -75,7 +75,7 @@ Run start-to-finish, the script works through these steps:
 | 3. Kept-back packages | `apt dist-upgrade -y` to pull in anything upgrade left held back. |
 | 4. Phased updates | Ubuntu's phased-rollout mechanism can hold packages back even after step 3. The script forces them in with `APT::Get::Always-Include-Phased-Updates=true` on both `upgrade` and `dist-upgrade`, then falls back to installing any still-remaining upgradable packages one at a time. |
 | 5. Reboot if required | Checks `/var/run/reboot-required` again; reboots if the new packages need it. |
-| 6. Cleanup | `apt autoremove -y`, `apt autoclean`, then a final `apt update` + upgradable-package count so the log shows whether anything's still outstanding. |
+| 6. Cleanup | `apt autoremove -y`, `apt autoclean`, then a final `apt update` + upgradable-package count so the log shows whether anything's still outstanding. If a Docker upgrade in the run restarted the daemon, any running container that bind-mounts `/var/run/docker.sock` and started before that restart is restarted so it reconnects (otherwise tools like Dockhand or Portainer show "socket not accessible" until the next manual restart). |
 
 ## Discord report
 

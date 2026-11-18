@@ -2,8 +2,9 @@
 # Enhanced Ubuntu Auto Patch Script with Phased Updates Support
 
 # Version of this script. It is inside the signed file, so someone checking the .sig by hand can also see
-# whether they were given an old release.
-SCRIPT_VERSION="2"
+# whether they were given an old release. Read by humans and the .sig, not referenced by the code.
+# shellcheck disable=SC2034
+SCRIPT_VERSION="3"
 
 # Runs as root (root's crontab). apt is called directly rather than through sudo: an autoremove
 # after a release upgrade can remove sudo, which would then make every apt step fail.
@@ -36,6 +37,8 @@ HOOK_FILE="/etc/auto-update/discord-webhook"
 BEFORE_FILE="$STATE_DIR/packages-before"
 REBOOTS_FILE="$STATE_DIR/reboots"
 FAILED_FILE="$STATE_DIR/failed-steps"
+# Containers restarted by the stale-docker.sock self-heal, so the Discord report can name them.
+RESTARTED_FILE="$STATE_DIR/restarted-containers"
 
 # Count failed apt steps, so a bad run says so instead of "completed successfully".
 # The count is kept in a file because a run can reboot part way and carry on after.
@@ -120,7 +123,7 @@ start_script() {
     mkdir -p "$STATE_DIR"
     dpkg-query -W -f='${Package} ${Version}\n' > "$BEFORE_FILE" 2>/dev/null
     echo 0 > "$REBOOTS_FILE"
-    rm -f "$FAILED_FILE"
+    rm -f "$FAILED_FILE" "$RESTARTED_FILE"
     check_reboot
     step2_install_updates
 }
@@ -198,11 +201,48 @@ check_reboot_after_updates() {
     cleanup
 }
 
+# After a docker-ce/containerd upgrade the Docker daemon restarts and recreates
+# /var/run/docker.sock with a new inode. A container that bind-mounts the socket FILE keeps the
+# old, now-dead inode and loses its Docker connection (e.g. Dockhand or Portainer report "socket
+# not accessible") until it is restarted. Restart any running container that mounts the socket and
+# started before the socket's current mtime, so a patch run that bounces the daemon self-heals.
+# No-op where Docker isn't installed or nothing is stale.
+restart_stale_socket_containers() {
+    command -v docker >/dev/null 2>&1 || return 0
+    local sock="/var/run/docker.sock"
+    [ -S "$sock" ] || return 0
+    local sock_mtime
+    sock_mtime=$(stat -c %Y "$sock" 2>/dev/null) || return 0
+    [ -n "$sock_mtime" ] || return 0
+    local name started started_epoch
+    while IFS= read -r name; do
+        [ -n "$name" ] || continue
+        # Only containers that bind-mount the docker socket file (either /var/run or /run spelling).
+        docker inspect "$name" -f '{{range .Mounts}}{{println .Source}}{{end}}' 2>/dev/null \
+            | grep -qxE '/(var/)?run/docker\.sock' || continue
+        started=$(docker inspect -f '{{.State.StartedAt}}' "$name" 2>/dev/null) || continue
+        started_epoch=$(date -d "$started" +%s 2>/dev/null) || continue
+        if [ "$started_epoch" -lt "$sock_mtime" ]; then
+            echo "Restarting container '$name': docker.sock was recreated after it started (stale socket mount)."
+            if docker restart "$name" >/dev/null 2>&1; then
+                echo "$name" >> "$RESTARTED_FILE"
+            else
+                echo "WARN: failed to restart container '$name'"
+                echo "$name (restart FAILED)" >> "$RESTARTED_FILE"
+            fi
+        fi
+    done < <(docker ps --format '{{.Names}}' 2>/dev/null)
+}
+
 # Function to clean up unnecessary packages
 cleanup() {
     echo "Cleaning up unnecessary packages..."
     apt_step autoremove -y
     apt_step autoclean
+
+    # A docker-ce/containerd upgrade in this run restarts the daemon and orphans any container that
+    # bind-mounts the socket; restart those so they reconnect (no-op if Docker isn't installed).
+    restart_stale_socket_containers
     
     # Final check for any remaining updates
     echo "Performing final update check..."
@@ -218,7 +258,7 @@ cleanup() {
     
     rm -f "$ERRORS_FILE"
     report "$REMAINING_UPDATES"
-    rm -f "$BEFORE_FILE" "$REBOOTS_FILE" "$FAILED_FILE"
+    rm -f "$BEFORE_FILE" "$REBOOTS_FILE" "$FAILED_FILE" "$RESTARTED_FILE"
     if [ "$ERRORS" -gt 0 ]; then
         echo "Script finished with $ERRORS failed apt step(s). Check the log above."
         rm -f "$PROGRESS_FILE"
@@ -236,7 +276,7 @@ json_text() {
 # Post the run's result to Discord: what changed (old -> new), reboots, what's still pending,
 # failed steps. Nothing is sent for a run that installed nothing and had no errors.
 report() {
-    local remaining="$1" url changes removed reboots failed title colour summary body
+    local remaining="$1" url changes removed reboots failed restarted title colour summary body
     url=$(cat "$HOOK_FILE" 2>/dev/null) || return 0
     [ -n "$url" ] || return 0
     if [ -f "$BEFORE_FILE" ]; then
@@ -246,7 +286,8 @@ report() {
     fi
     reboots=$(cat "$REBOOTS_FILE" 2>/dev/null || echo 0)
     failed=$(cat "$FAILED_FILE" 2>/dev/null)
-    if [ -z "$changes" ] && [ "$reboots" -eq 0 ] && [ "$ERRORS" -eq 0 ]; then
+    restarted=$(cat "$RESTARTED_FILE" 2>/dev/null)
+    if [ -z "$changes" ] && [ "$reboots" -eq 0 ] && [ "$ERRORS" -eq 0 ] && [ -z "$restarted" ]; then
         return 0
     fi
     local n=0
@@ -264,6 +305,7 @@ report() {
     summary="$summary · ${remaining:-0} pending"
     body="$summary"
     [ -n "$failed" ] && body="$body"$'\n'"Failed: "$'\n'"\`\`\`"$'\n'"$failed"$'\n'"\`\`\`"
+    [ -n "$restarted" ] && body="$body"$'\n'"Restarted after Docker upgrade (stale socket): "$'\n'"\`\`\`"$'\n'"$restarted"$'\n'"\`\`\`"
     if [ -n "$changes" ]; then
         body="$body"$'\n'"\`\`\`"$'\n'"$(printf '%s\n' "$changes" | head -40)"
         [ "$n" -gt 40 ] && body="$body"$'\n'"…and $((n - 40)) more"

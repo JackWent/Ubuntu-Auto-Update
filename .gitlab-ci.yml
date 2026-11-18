@@ -183,6 +183,34 @@ smoke-test:
     - grep -qxF "apt upgrade -y" /tmp/apt.log
     - test ! -e /var/log/update-script-progress
     - test "$(cat /tmp/victim)" = untouched
+
+    - 'echo "== test 16: a container with a stale docker.sock mount is restarted; a fresh one is left =="'
+    - command -v python3 >/dev/null || { apt-get update -qq && apt-get install -y --no-install-recommends python3 >/dev/null; }
+    - rm -f /var/lib/update-script/progress /var/run/reboot-required /tmp/apt.log /tmp/reboot.log /tmp/docker-restart.log
+    # A real AF_UNIX socket so the function's [ -S ] guard passes, with a known mtime.
+    - python3 -c "import socket,os; p='/var/run/docker.sock'; os.path.exists(p) and os.remove(p); socket.socket(socket.AF_UNIX).bind(p)"
+    - touch -d '2026-06-01T00:00:00' /var/run/docker.sock
+    # Stub docker: both containers mount the socket; STALE started before the socket mtime, FRESH after.
+    - |
+      cat > /usr/local/bin/docker <<'STUB'
+      #!/bin/bash
+      if [ "$1" = "ps" ]; then printf '%s\n' STALE FRESH; exit 0; fi
+      if [ "$1" = "inspect" ]; then
+        if [ "$2" = "-f" ]; then fmt="$3"; name="$4"; else name="$2"; fmt="$4"; fi
+        case "$fmt" in
+          *Mounts*)    echo "/var/run/docker.sock" ;;
+          *StartedAt*) if [ "$name" = STALE ]; then echo "2026-01-01T00:00:00Z"; else echo "2026-09-01T00:00:00Z"; fi ;;
+        esac
+        exit 0
+      fi
+      if [ "$1" = "restart" ]; then echo "$2" >> /tmp/docker-restart.log; exit 0; fi
+      exit 0
+      STUB
+    - chmod +x /usr/local/bin/docker
+    - FAKE_UPGRADABLE_COUNT=0 bash auto-update.sh
+    - grep -qxF STALE /tmp/docker-restart.log
+    - '! grep -qxF FRESH /tmp/docker-restart.log'
+    - rm -f /usr/local/bin/docker /var/run/docker.sock
   only:
     - master
     - merge_requests
