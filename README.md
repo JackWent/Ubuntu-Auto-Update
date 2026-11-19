@@ -46,11 +46,15 @@ sudo curl -fsSL -o /opt/scripts/auto-update.sh https://raw.githubusercontent.com
 sudo chmod +x /opt/scripts/auto-update.sh
 ```
 
-Then add two lines to root's crontab (`sudo crontab -e`):
+Make a root-only folder for its log, then add two lines to root's crontab (`sudo crontab -e`):
+
+```bash
+sudo install -d -o root -g adm -m 0750 /var/log/auto-update
+```
 
 ```cron
-@reboot /opt/scripts/auto-update.sh >> /var/log/auto-update.log 2>&1
-0 0 * * * /opt/scripts/auto-update.sh >> /var/log/auto-update.log 2>&1
+@reboot /opt/scripts/auto-update.sh >> /var/log/auto-update/auto-update.log 2>&1
+0 0 * * * /opt/scripts/auto-update.sh >> /var/log/auto-update/auto-update.log 2>&1
 ```
 
 Optionally, for Discord reports, save a webhook URL where only root can read it:
@@ -143,11 +147,31 @@ Add to root's crontab (`sudo crontab -e`):
 The script writes progress to stdout/stderr only — it does not redirect to a
 log file itself. Under cron, that output either gets mailed to root (if a
 local MTA is configured) or silently discarded. To keep a persistent log,
-redirect it in the crontab entry instead:
+redirect it in the crontab entry instead. Put the log in its own root-only folder rather than
+straight in `/var/log`: on Ubuntu `/var/log` is writable by the `syslog` group, and cron appends to the
+file as root, so a symlink planted there would make root write somewhere else.
+
+```bash
+sudo install -d -o root -g adm -m 0750 /var/log/auto-update
+```
 
 ```cron
-@reboot /opt/scripts/auto-update.sh >> /var/log/auto-update.log 2>&1
-0 0 * * * /opt/scripts/auto-update.sh >> /var/log/auto-update.log 2>&1
+@reboot /opt/scripts/auto-update.sh >> /var/log/auto-update/auto-update.log 2>&1
+0 0 * * * /opt/scripts/auto-update.sh >> /var/log/auto-update/auto-update.log 2>&1
+```
+
+A matching `/etc/logrotate.d/auto-update` keeps it in check:
+
+```
+/var/log/auto-update/auto-update.log {
+    weekly
+    rotate 8
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0640 root adm
+}
 ```
 
 ## Manual usage
